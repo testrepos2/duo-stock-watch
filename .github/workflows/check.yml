@@ -1,0 +1,46 @@
+name: duo-stock-watch
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+permissions:
+  issues: write
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PART: MK1E4LL/A
+      UA: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
+    steps:
+      - name: Check Apple pickup + Visible
+        run: |
+          msg=""
+          A=$(curl -sS -m 30 -A "$UA" "https://www.apple.com/shop/retail/pickup-message?pl=true&parts.0=$PART&location=95113" || true)
+          if echo "$A" | jq -e '.body.stores | length > 0' >/dev/null 2>&1; then
+            echo "$A" | jq -r --arg p "$PART" '.body.stores[] | "\(.storeName): \(.partsAvailability[$p].pickupDisplay)"'
+            stores=$(echo "$A" | jq -r --arg p "$PART" '[.body.stores[] | select(.partsAvailability[$p].pickupDisplay=="available") | .storeName] | join(", ")')
+            [ -n "$stores" ] && msg="Apple pickup available: $stores
+          https://www.apple.com/shop/buy-iphone/iphone-duo/7.6-inch-display-256gb-star-white-unlocked"
+          else
+            echo "::warning::Apple check failed: $(echo "$A" | head -c 300)"
+          fi
+          V=$(curl -sS -m 30 -A "$UA" "https://www.visible.com/apple/compare" || true)
+          if echo "$V" | grep -q "iPhone Duo"; then
+            if echo "$V" | grep -qi "Coming soon"; then echo "Visible: Coming soon"; else
+              echo "Visible: no longer Coming soon"
+              msg="$msg
+          Visible now selling iPhone Duo (White 256GB unconfirmed): https://www.visible.com/shop/smartphones/iphone-duo?sku=MK1E4LL%2FA"
+            fi
+          else
+            echo "::warning::Visible check failed: $(echo "$V" | head -c 300)"
+          fi
+          if [ -n "$msg" ]; then
+            n=$(gh issue list --state open --label available --json number --jq length 2>/dev/null || echo 0)
+            if [ "$n" = "0" ]; then
+              gh label create available --color d73a4a 2>/dev/null || true
+              gh issue create --title "iPhone Duo White 256GB available" --label available --body "$msg"
+            fi
+          fi
